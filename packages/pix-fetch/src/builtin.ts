@@ -30,6 +30,7 @@ function plainText(content: string): string {
 
 const exa: FetchProvider = {
 	id: "exa",
+	env: ["EXA_API_KEY"],
 	isConfigured: () => Boolean(process.env.EXA_API_KEY),
 	async fetch(request: FetchRequest): Promise<FetchResponse> {
 		const data = (await jsonRequest(
@@ -50,6 +51,7 @@ const exa: FetchProvider = {
 
 const tavily: FetchProvider = {
 	id: "tavily",
+	env: ["TAVILY_API_KEY"],
 	isConfigured: () => Boolean(process.env.TAVILY_API_KEY),
 	async fetch(request: FetchRequest): Promise<FetchResponse> {
 		const data = (await jsonRequest(
@@ -74,6 +76,7 @@ const tavily: FetchProvider = {
 
 const youcom: FetchProvider = {
 	id: "youcom",
+	env: ["YDC_API_KEY"],
 	isConfigured: () => Boolean(process.env.YDC_API_KEY),
 	async fetch(request: FetchRequest): Promise<FetchResponse> {
 		// Retrieval and extraction happen server-side at You.com; markdown is
@@ -99,6 +102,71 @@ const youcom: FetchProvider = {
 	},
 };
 
+// firecrawl scrapes a single URL per call, returning markdown/html/text with
+// server-side retrieval and extraction with an explicit API key.
+const firecrawl: FetchProvider = {
+	id: "firecrawl",
+	env: ["FIRECRAWL_API_KEY"],
+	isConfigured: () => Boolean(process.env.FIRECRAWL_API_KEY),
+	async fetch(request: FetchRequest): Promise<FetchResponse> {
+		const data = (await jsonRequest(
+			"https://api.firecrawl.dev/v1/scrape",
+			process.env.FIRECRAWL_API_KEY ?? "",
+			"bearer",
+			{ url: request.url, formats: [request.format] },
+			request.signal,
+		)) as {
+			data?: { markdown?: string; html?: string; text?: string; metadata?: { title?: string } };
+		};
+		const page = data.data;
+		return {
+			title: page?.metadata?.title,
+			url: request.url,
+			content: plainText(page?.markdown || page?.html || page?.text || ""),
+		};
+	},
+};
+
+// jina-reader returns text, not JSON, and works with or without a key.
+const jinaReader: FetchProvider = {
+	id: "jina-reader",
+	env: ["JINA_API_KEY"],
+	async fetch(request: FetchRequest): Promise<FetchResponse> {
+		const key = process.env.JINA_API_KEY;
+		const response = await fetch("https://r.jina.ai/", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(key ? { Authorization: `Bearer ${key}` } : {}),
+			},
+			body: JSON.stringify({ url: request.url }),
+			signal: request.signal,
+		});
+		if (!response.ok)
+			throw new Error(`${response.status}: ${(await response.text()).slice(0, 500)}`);
+		const body = await response.text();
+		const title = body.match(/^\s*Title:\s*(.+)$/im)?.[1] || body.match(/^\s*#\s+(.+)$/m)?.[1];
+		return { title: title?.trim(), url: request.url, content: plainText(body) };
+	},
+};
+
+const ollama: FetchProvider = {
+	id: "ollama",
+	env: ["OLLAMA_API_KEY", "OLLAMA_URL"],
+	isConfigured: () => Boolean(process.env.OLLAMA_API_KEY),
+	async fetch(request: FetchRequest): Promise<FetchResponse> {
+		const base = process.env.OLLAMA_URL || "https://ollama.com/api/web_fetch";
+		const data = (await jsonRequest(
+			base,
+			process.env.OLLAMA_API_KEY ?? "",
+			"bearer",
+			{ url: request.url },
+			request.signal,
+		)) as { title?: string; content?: string };
+		return { title: data.title, url: request.url, content: plainText(data.content || "") };
+	},
+};
+
 function routerBaseUrl(): string {
 	const configured = process.env.NINEROUTER_URL || process.env.ROUTER_API_BASE;
 	const base = (configured || "https://9router.com").replace(/\/$/, "");
@@ -108,6 +176,7 @@ function routerBaseUrl(): string {
 function nineRouter(): FetchProvider {
 	return {
 		id: "9router",
+		env: ["NINEROUTER_URL", "NINEROUTER_KEY"],
 		isConfigured: () => Boolean(process.env.NINEROUTER_URL || process.env.ROUTER_API_BASE),
 		async fetch(request: FetchRequest): Promise<FetchResponse> {
 			const key = process.env.NINEROUTER_KEY || process.env.ROUTER_API_KEY;
@@ -171,6 +240,9 @@ export function registerBuiltinProviders(): void {
 	registerFetchProvider(exa);
 	registerFetchProvider(tavily);
 	registerFetchProvider(youcom);
+	registerFetchProvider(firecrawl);
+	registerFetchProvider(jinaReader);
+	registerFetchProvider(ollama);
 	registerFetchProvider(nineRouter());
 	registerFetchProvider(curl);
 }
